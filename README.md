@@ -2,6 +2,8 @@
 
 Escrito em linguagem C com interface gráfica GTK4
 
+![IED Explorer](IED Explorer.png)
+
 ## Dependências:
 
 - Para instalar as dependências:
@@ -40,6 +42,7 @@ Edite o arquivo "Makefile" colocando na variável "IEC_DIR" o caminho onde foi d
 a biblioteca "libiec61850.
 
 Ex:
+
 IEC_DIR = /home/desenvolvimento/libiec61850-1.6.2.1
 
 ## Para compilar:
