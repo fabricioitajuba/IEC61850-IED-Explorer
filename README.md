@@ -4,6 +4,10 @@ Escrito em linguagem C com interface gráfica GTK4
 
 ![IED Explorer](https://github.com/fabricioitajuba/IEC61850-IED-Explorer/blob/main/IED%20Explorer.png)
 
+O arquivo contém o código-fonte completo em C utilizando GTK 4 e libiec61850 para navegação na árvore do IED, 
+leitura assíncrona com auto-atualização e o painel de escrita habilitado automaticamente para variáveis editáveis 
+(SP, CF, DC, SV, SE e SG) com tipos MMS primitivos
+
 ## Dependências:
 
 - Para instalar as dependências:
