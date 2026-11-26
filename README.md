@@ -8,6 +8,9 @@ O arquivo "main.c" contém o código-fonte completo em C utilizando GTK 4 e libi
 leitura assíncrona com auto-atualização e o painel de escrita habilitado automaticamente para variáveis editáveis 
 (SP, CF, DC, SV, SE e SG) com tipos MMS primitivos
 
+Este exemplo poderá ser executado junto com o exemplo:
+https://github.com/fabricioitajuba/IEC61850-IED-Server-mms
+
 ## Dependências:
 
 - Para instalar as dependências:
