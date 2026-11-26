@@ -5,6 +5,8 @@ Escrito em linguagem C com interface gráfica GTK4
 ![IED Explorer]([assets/IED Explorer.png](https://github.com/fabricioitajuba/IEC61850-IED-Explorer/blob/main/IED%20Explorer.png))
 <img src="[URL_da_Imagem](https://github.com/fabricioitajuba/IEC61850-IED-Explorer/blob/main/IED%20Explorer.png)" alt="Texto Alternativo">
 
+https://github.com/fabricioitajuba/IEC61850-IED-Explorer/IED Explorer.png
+
 ## Dependências:
 
 - Para instalar as dependências:
