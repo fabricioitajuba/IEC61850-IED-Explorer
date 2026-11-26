@@ -79,7 +79,7 @@ O binário executável, será criado na pasta: /bin
 ~/IED Explorer/bin$ sudo ./mini_ied_explorer
 ```
 
-## Enviando um comando para o IED
+## Enviando um comando para o IED (IEC61850-IED-Server-mms)
 
 Na janela do programa, siga esta sequência:
 
