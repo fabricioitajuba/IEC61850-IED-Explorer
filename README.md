@@ -3,9 +3,9 @@
 Escrito em linguagem C com interface gráfica GTK4
 
 ![IED Explorer]([assets/IED Explorer.png](https://github.com/fabricioitajuba/IEC61850-IED-Explorer/blob/main/IED%20Explorer.png))
-<img src="[URL_da_Imagem](https://github.com/fabricioitajuba/IEC61850-IED-Explorer/blob/main/IED%20Explorer.png)" alt="Texto Alternativo">
 
-https://github.com/fabricioitajuba/IEC61850-IED-Explorer/IED Explorer.png
+![Screenshot of a comment on a GitHub issue showing an image, added in the Markdown, of an Octocat smiling and raising a tentacle.]([https://myoctocat.com/assets/images/base-octocat.svg](https://github.com/fabricioitajuba/IEC61850-IED-Explorer/blob/main/IED%20Explorer.png))
+
 
 ## Dependências:
 
