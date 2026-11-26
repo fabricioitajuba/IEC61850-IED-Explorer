@@ -2,7 +2,7 @@
 
 Escrito em linguagem C com interface gráfica GTK4
 
-![IED Explorer](assets/IED Explorer.png)
+![IED Explorer]([assets/IED Explorer.png](https://github.com/fabricioitajuba/IEC61850-IED-Explorer/blob/main/IED%20Explorer.png))
 
 ## Dependências:
 
