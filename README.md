@@ -86,12 +86,12 @@ Na janela do programa, siga esta sequência:
 
 3. Testar Comando Direct Operate (SPCSO1):
 
-  • Expanda SPCSO1 e clique em Oper[CO] (ou clique diretamente no nó SPCSO1).
-	• O campo de escrita será habilitado automaticamente. Digite 1 (ou true) e clique em Escrever / Comandar.
-	• Clique em stVal[ST] dentro de SPCSO1 para confirmar que o valor mudou para TRUE (1).
+- Expanda SPCSO1 e clique em Oper[CO] (ou clique diretamente no nó SPCSO1).
+- O campo de escrita será habilitado automaticamente. Digite 1 (ou true) e clique em Escrever / Comandar.
+- Clique em stVal[ST] dentro de SPCSO1 para confirmar que o valor mudou para TRUE (1).
 
 4. Testar Comando SBO (DPCSO2):
 	
-  • Expanda DPCSO2 e selecione Oper[CO] (ou o próprio DPCSO2).
-	• Digite 1 e clique em Escrever / Comandar (o cliente executará automaticamente o Select e depois o Operate).
-	• Verifique stVal[ST] dentro de DPCSO2: o estado mudará de 0b01 (Aberto/OFF) para 0b10 (Fechado/ON).
+- Expanda DPCSO2 e selecione Oper[CO] (ou o próprio DPCSO2).
+- Digite 1 e clique em Escrever / Comandar (o cliente executará automaticamente o Select e depois o Operate).
+- Verifique stVal[ST] dentro de DPCSO2: o estado mudará de 0b01 (Aberto/OFF) para 0b10 (Fechado/ON).
