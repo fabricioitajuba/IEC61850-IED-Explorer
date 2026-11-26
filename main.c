@@ -74,11 +74,12 @@ typedef struct {
     GtkWidget *lbl_value;
     GtkWidget *btn_refresh;
 
-    // Painel de Escrita
+    // Painel de Escrita / Comando
     GtkWidget *entry_write;
     GtkWidget *btn_write;
     MmsType current_mms_type;
     int current_bitstring_size;
+    gboolean is_control_mode;
 
     // Controles de Auto-Atualização (Polling)
     GtkWidget *spin_interval;
@@ -119,15 +120,18 @@ typedef struct {
     char *input_text;
     MmsType mms_type;
     int bitstring_size;
+    gboolean is_control;
     IedClientError error;
     gboolean parse_ok;
+    gboolean control_success;
+    char *detail_msg;
 } WriteTaskData;
 
 // Protótipo antecipado
 static void trigger_async_read(AppState *state);
 
 // ============================================================================
-// 3. AUXILIARES DE PERMISSÃO E CONVERSÃO MMS <-> TEXTO
+// 3. AUXILIARES DE PERMISSÃO, CONTROLE E CONVERSÃO MMS <-> TEXTO
 // ============================================================================
 static gboolean is_fc_writable(FunctionalConstraint fc) {
     switch (fc) {
@@ -156,6 +160,20 @@ static gboolean is_mms_type_editable(MmsType type) {
         default:
             return FALSE;
     }
+}
+
+/* Extrai a referência base do Data Object de controle (ex: "GenericIO/GGIO1.SPCSO1.Oper" -> "GenericIO/GGIO1.SPCSO1") */
+static char *extract_control_object_ref(const char *ref) {
+    if (!ref) return NULL;
+    char *copy = g_strdup(ref);
+    const char *suffixes[] = {".Oper.ctlVal", ".SBOw.ctlVal", ".Oper", ".SBOw", ".SBO", ".Cancel"};
+    for (size_t i = 0; i < G_N_ELEMENTS(suffixes); i++) {
+        if (g_str_has_suffix(copy, suffixes[i])) {
+            copy[strlen(copy) - strlen(suffixes[i])] = '\0';
+            break;
+        }
+    }
+    return copy;
 }
 
 static char *mms_value_to_string(MmsValue *val) {
@@ -209,9 +227,9 @@ static MmsValue *string_to_mms_value(const char *text, MmsType type, int bitstri
 
     switch (type) {
         case MMS_BOOLEAN: {
-            if (g_ascii_strcasecmp(text, "true") == 0 || strcmp(text, "1") == 0)
+            if (g_ascii_strcasecmp(text, "true") == 0 || strcmp(text, "1") == 0 || g_ascii_strcasecmp(text, "on") == 0)
                 return MmsValue_newBoolean(true);
-            if (g_ascii_strcasecmp(text, "false") == 0 || strcmp(text, "0") == 0)
+            if (g_ascii_strcasecmp(text, "false") == 0 || strcmp(text, "0") == 0 || g_ascii_strcasecmp(text, "off") == 0)
                 return MmsValue_newBoolean(false);
             return NULL;
         }
@@ -344,7 +362,7 @@ static GListModel *create_child_model(gpointer item, gpointer user_data) {
 }
 
 // ============================================================================
-// 5. LEITURA, ESCRITA ASSÍNCRONA E AUTO-ATUALIZAÇÃO
+// 5. LEITURA, ESCRITA/COMANDO ASSÍNCRONO E AUTO-ATUALIZAÇÃO
 // ============================================================================
 static void set_button_icon_and_label(GtkWidget *button, const char *icon_name, const char *label_text) {
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
@@ -355,9 +373,18 @@ static void set_button_icon_and_label(GtkWidget *button, const char *icon_name, 
     gtk_button_set_child(GTK_BUTTON(button), box);
 }
 
-static void update_write_controls(AppState *state, gboolean can_write, MmsType type) {
+static void update_write_controls(AppState *state, gboolean can_write, gboolean is_control, MmsType type) {
+    state->is_control_mode = is_control;
     gtk_widget_set_sensitive(state->entry_write, can_write);
     gtk_widget_set_sensitive(state->btn_write, can_write);
+
+    if (is_control) {
+        set_button_icon_and_label(state->btn_write, "system-run-symbolic", "Comandar (CO)");
+        gtk_entry_set_placeholder_text(GTK_ENTRY(state->entry_write), "Comando: 1 (Ligar/Fechar) ou 0 (Desligar/Abrir)");
+        return;
+    }
+
+    set_button_icon_and_label(state->btn_write, "document-send-symbolic", "Escrever");
 
     if (!can_write) {
         gtk_entry_set_placeholder_text(GTK_ENTRY(state->entry_write), "Variável somente leitura ou estrutura");
@@ -405,13 +432,16 @@ static gboolean on_read_finished(gpointer user_data) {
     if (state->selected_node && g_strcmp0(state->selected_node->reference, task->reference) == 0) {
         gtk_label_set_text(GTK_LABEL(state->lbl_value), task->result_text);
 
-        if (task->read_ok) {
+        if (state->selected_node->fc == IEC61850_FC_CO) {
+            state->current_mms_type = MMS_BOOLEAN;
+            update_write_controls(state, TRUE, TRUE, MMS_BOOLEAN);
+        } else if (task->read_ok) {
             state->current_mms_type = task->mms_type;
             state->current_bitstring_size = task->bitstring_size;
             gboolean can_write = is_fc_writable(state->selected_node->fc) && is_mms_type_editable(task->mms_type);
-            update_write_controls(state, can_write, task->mms_type);
+            update_write_controls(state, can_write, FALSE, task->mms_type);
         } else {
-            update_write_controls(state, FALSE, MMS_STRUCTURE);
+            update_write_controls(state, FALSE, FALSE, MMS_STRUCTURE);
         }
     }
 
@@ -429,20 +459,25 @@ static gpointer read_thread_worker(gpointer user_data) {
     g_mutex_lock(&state->net_mutex);
 
     if (state->is_connected && state->con) {
-        IedClientError error;
-        MmsValue *val = IedConnection_readObject(state->con, &error, task->reference, task->fc);
-
-        if (error == IED_ERROR_OK && val != NULL) {
-            task->read_ok = TRUE;
-            task->mms_type = MmsValue_getType(val);
-            if (task->mms_type == MMS_BIT_STRING) {
-                task->bitstring_size = MmsValue_getBitStringSize(val);
-            }
-            task->result_text = mms_value_to_string(val);
-            MmsValue_delete(val);
-        } else {
+        if (task->fc == IEC61850_FC_CO) {
             task->read_ok = FALSE;
-            task->result_text = g_strdup_printf("Erro de leitura (Código: %d)", error);
+            task->result_text = g_strdup("(Objeto de Controle FC=CO: digite 1 ou 0 abaixo para comandar)");
+        } else {
+            IedClientError error;
+            MmsValue *val = IedConnection_readObject(state->con, &error, task->reference, task->fc);
+
+            if (error == IED_ERROR_OK && val != NULL) {
+                task->read_ok = TRUE;
+                task->mms_type = MmsValue_getType(val);
+                if (task->mms_type == MMS_BIT_STRING) {
+                    task->bitstring_size = MmsValue_getBitStringSize(val);
+                }
+                task->result_text = mms_value_to_string(val);
+                MmsValue_delete(val);
+            } else {
+                task->read_ok = FALSE;
+                task->result_text = g_strdup_printf("Erro de leitura (Código: %d)", error);
+            }
         }
     } else {
         task->read_ok = FALSE;
@@ -469,6 +504,16 @@ static void trigger_async_read(AppState *state) {
         gtk_label_set_text(GTK_LABEL(state->lbl_fc), "N/A");
     }
 
+    if (state->is_connected && node->fc == IEC61850_FC_CO) {
+        stop_auto_refresh(state);
+        gtk_widget_set_sensitive(state->btn_refresh, FALSE);
+        gtk_widget_set_sensitive(state->btn_auto_refresh, FALSE);
+        gtk_label_set_text(GTK_LABEL(state->lbl_value), "(Objeto de Controle FC=CO: digite 1 ou 0 abaixo para comandar)");
+        state->current_mms_type = MMS_BOOLEAN;
+        update_write_controls(state, TRUE, TRUE, MMS_BOOLEAN);
+        return;
+    }
+
     if (state->is_connected && node->type == NODE_DA && node->fc != IEC61850_FC_NONE) {
         state->is_reading = TRUE;
         gtk_widget_set_sensitive(state->btn_refresh, TRUE);
@@ -481,20 +526,27 @@ static void trigger_async_read(AppState *state) {
         g_thread_new("mms-read", read_thread_worker, task);
     } else {
         stop_auto_refresh(state);
-        update_write_controls(state, FALSE, MMS_STRUCTURE);
-        gtk_label_set_text(GTK_LABEL(state->lbl_value), "(Selecione um Data Attribute folha para ler o valor)");
+        update_write_controls(state, FALSE, FALSE, MMS_STRUCTURE);
+        gtk_label_set_text(GTK_LABEL(state->lbl_value), "(Selecione um Data Attribute folha para ler ou um nó [CO] para comandar)");
         gtk_widget_set_sensitive(state->btn_refresh, FALSE);
         gtk_widget_set_sensitive(state->btn_auto_refresh, FALSE);
     }
 }
 
-// --- Lógica de Escrita ---
+// --- Lógica de Escrita e Comando IEC 61850 ---
 static gboolean on_write_finished(gpointer user_data) {
     WriteTaskData *task = (WriteTaskData *)user_data;
     AppState *state = task->state;
 
     if (!task->parse_ok) {
-        gtk_label_set_text(GTK_LABEL(state->lbl_status), "Status: Formato de valor inválido para o tipo MMS da variável.");
+        gtk_label_set_text(GTK_LABEL(state->lbl_status), "Status: Formato inválido. Para comandos use 1 (ON/Fechar) ou 0 (OFF/Abrir).");
+    } else if (task->is_control) {
+        if (task->control_success) {
+            gtk_label_set_text(GTK_LABEL(state->lbl_status), task->detail_msg);
+            gtk_editable_set_text(GTK_EDITABLE(state->entry_write), "");
+        } else {
+            gtk_label_set_text(GTK_LABEL(state->lbl_status), task->detail_msg);
+        }
     } else if (task->error == IED_ERROR_OK) {
         char *msg = g_strdup_printf("Status: Valor escrito com sucesso em %s", task->reference);
         gtk_label_set_text(GTK_LABEL(state->lbl_status), msg);
@@ -507,12 +559,13 @@ static gboolean on_write_finished(gpointer user_data) {
         g_free(msg);
     }
 
-    if (state->selected_node && is_fc_writable(state->selected_node->fc)) {
+    if (state->selected_node && (is_fc_writable(state->selected_node->fc) || state->selected_node->fc == IEC61850_FC_CO)) {
         gtk_widget_set_sensitive(state->btn_write, TRUE);
     }
 
     g_free(task->reference);
     g_free(task->input_text);
+    g_free(task->detail_msg);
     g_free(task);
     return G_SOURCE_REMOVE;
 }
@@ -531,10 +584,50 @@ static gpointer write_thread_worker(gpointer user_data) {
     task->parse_ok = TRUE;
     g_mutex_lock(&state->net_mutex);
 
-    if (state->is_connected && state->con) {
-        IedConnection_writeObject(state->con, &task->error, task->reference, task->fc, new_val);
-    } else {
+    if (!state->is_connected || !state->con) {
         task->error = IED_ERROR_NOT_CONNECTED;
+        task->control_success = FALSE;
+        task->detail_msg = g_strdup("Status: Desconectado do IED.");
+    } else if (task->is_control) {
+        char *co_ref = extract_control_object_ref(task->reference);
+        ControlObjectClient control = ControlObjectClient_create(co_ref, state->con);
+
+        if (control) {
+            ControlModel model = ControlObjectClient_getControlModel(control);
+            bool ok = false;
+            const char *mode_str = "Direct";
+
+            if (model == CONTROL_MODEL_SBO_NORMAL) {
+                mode_str = "SBO Normal";
+                if (ControlObjectClient_select(control)) {
+                    ok = ControlObjectClient_operate(control, new_val, 0);
+                }
+            } else if (model == CONTROL_MODEL_SBO_ENHANCED) {
+                mode_str = "SBO Enhanced";
+                if (ControlObjectClient_selectWithValue(control, new_val)) {
+                    ok = ControlObjectClient_operate(control, new_val, 0);
+                }
+            } else {
+                mode_str = (model == CONTROL_MODEL_DIRECT_ENHANCED) ? "Direct Enhanced" : "Direct Normal";
+                ok = ControlObjectClient_operate(control, new_val, 0);
+            }
+
+            task->control_success = ok ? TRUE : FALSE;
+            if (ok) {
+                task->detail_msg = g_strdup_printf("Status: Comando [%s] enviado com sucesso para %s (Verifique stVal[ST])", mode_str, co_ref);
+            } else {
+                LastApplError last_err = ControlObjectClient_getLastApplError(control);
+                task->detail_msg = g_strdup_printf("Status: Falha no comando [%s] em %s (addCause: %d)", mode_str, co_ref, last_err.addCause);
+            }
+
+            ControlObjectClient_destroy(control);
+        } else {
+            task->control_success = FALSE;
+            task->detail_msg = g_strdup_printf("Status: Não foi possível criar ControlObjectClient para %s", co_ref);
+        }
+        g_free(co_ref);
+    } else {
+        IedConnection_writeObject(state->con, &task->error, task->reference, task->fc, new_val);
     }
 
     g_mutex_unlock(&state->net_mutex);
@@ -564,6 +657,7 @@ static void on_write_clicked(GtkButton *btn, gpointer user_data) {
     task->input_text = g_strdup(text);
     task->mms_type = state->current_mms_type;
     task->bitstring_size = state->current_bitstring_size;
+    task->is_control = state->is_control_mode;
 
     g_thread_new("mms-write", write_thread_worker, task);
 }
@@ -606,7 +700,7 @@ static void on_selection_changed(GtkSelectionModel *model, guint position, guint
     if (row) {
         state->selected_node = IED_NODE(gtk_tree_list_row_get_item(row));
         gtk_editable_set_text(GTK_EDITABLE(state->entry_write), "");
-        update_write_controls(state, FALSE, MMS_STRUCTURE);
+        update_write_controls(state, FALSE, FALSE, MMS_STRUCTURE);
         trigger_async_read(state);
     }
 }
@@ -652,6 +746,8 @@ static void bind_tree_item(GtkListItemFactory *factory, GtkListItem *list_item, 
         icon_name = "text-x-generic-symbolic";
     else if (node->type == NODE_DO)
         icon_name = "folder-symbolic";
+    else if (node->fc == IEC61850_FC_CO)
+        icon_name = "system-run-symbolic";
 
     gtk_image_set_from_icon_name(GTK_IMAGE(icon), icon_name);
     gtk_label_set_text(GTK_LABEL(label), node->name);
@@ -727,7 +823,7 @@ static void on_disconnect_clicked(GtkButton *btn, gpointer user_data) {
     g_mutex_unlock(&state->net_mutex);
     g_list_store_remove_all(state->root_store);
     state->selected_node = NULL;
-    update_write_controls(state, FALSE, MMS_STRUCTURE);
+    update_write_controls(state, FALSE, FALSE, MMS_STRUCTURE);
     gtk_editable_set_text(GTK_EDITABLE(state->entry_write), "");
     gtk_widget_set_sensitive(state->btn_connect, TRUE);
     gtk_widget_set_sensitive(state->btn_disconnect, FALSE);
@@ -761,7 +857,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     AppState *state = g_new0(AppState, 1);
     g_mutex_init(&state->net_mutex);
     state->window = gtk_application_window_new(app);
-    gtk_window_set_title(GTK_WINDOW(state->window), "Mini IED Explorer - Browser, Leitura & Escrita MMS");
+    gtk_window_set_title(GTK_WINDOW(state->window), "Mini IED Explorer - Browser, Leitura, Escrita & Controle MMS");
     gtk_window_set_default_size(GTK_WINDOW(state->window), 980, 600);
     GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
     gtk_widget_set_margin_top(vbox, 12);
@@ -844,9 +940,9 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_grid_attach(GTK_GRID(grid), gtk_label_new("Valor Atual (MMS):"), 0, 3, 1, 1);
     gtk_grid_attach(GTK_GRID(grid), state->lbl_value, 1, 3, 1, 1);
 
-    // --- Seção de Escrita ---
+    // --- Seção de Escrita e Comando ---
     gtk_box_append(GTK_BOX(right_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
-    GtkWidget *lbl_write_title = gtk_label_new("Escrita de Valor (Variáveis Editáveis)");
+    GtkWidget *lbl_write_title = gtk_label_new("Escrita de Parâmetro / Comando de Controle");
     gtk_label_set_xalign(GTK_LABEL(lbl_write_title), 0.0);
     gtk_box_append(GTK_BOX(right_box), lbl_write_title);
 
@@ -856,7 +952,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     state->entry_write = gtk_entry_new();
     gtk_widget_set_hexpand(state->entry_write, TRUE);
     gtk_widget_set_sensitive(state->entry_write, FALSE);
-    gtk_entry_set_placeholder_text(GTK_ENTRY(state->entry_write), "Selecione uma variável editável...");
+    gtk_entry_set_placeholder_text(GTK_ENTRY(state->entry_write), "Selecione uma variável editável ou controle [CO]...");
 
     state->btn_write = gtk_button_new();
     set_button_icon_and_label(state->btn_write, "document-send-symbolic", "Escrever");
