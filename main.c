@@ -74,6 +74,12 @@ typedef struct {
     GtkWidget *lbl_value;
     GtkWidget *btn_refresh;
 
+    // Painel de Escrita
+    GtkWidget *entry_write;
+    GtkWidget *btn_write;
+    MmsType current_mms_type;
+    int current_bitstring_size;
+
     // Controles de Auto-Atualização (Polling)
     GtkWidget *spin_interval;
     GtkWidget *btn_auto_refresh;
@@ -87,7 +93,6 @@ typedef struct {
     IedNode *selected_node;
 } AppState;
 
-// Estrutura auxiliar para conexão assíncrona
 typedef struct {
     AppState *state;
     char *ip;
@@ -97,19 +102,63 @@ typedef struct {
     LinkedList device_list;
 } ConnectTaskData;
 
-// Estrutura auxiliar para leitura assíncrona
 typedef struct {
     AppState *state;
     char *reference;
     FunctionalConstraint fc;
     char *result_text;
+    MmsType mms_type;
+    int bitstring_size;
+    gboolean read_ok;
 } ReadTaskData;
 
-// ============================================================================
-// 3. CONVERSÃO MMS -> TEXTO
-// ============================================================================
-static char *mms_value_to_string(MmsValue *val) {
+typedef struct {
+    AppState *state;
+    char *reference;
+    FunctionalConstraint fc;
+    char *input_text;
+    MmsType mms_type;
+    int bitstring_size;
+    IedClientError error;
+    gboolean parse_ok;
+} WriteTaskData;
 
+// Protótipo antecipado
+static void trigger_async_read(AppState *state);
+
+// ============================================================================
+// 3. AUXILIARES DE PERMISSÃO E CONVERSÃO MMS <-> TEXTO
+// ============================================================================
+static gboolean is_fc_writable(FunctionalConstraint fc) {
+    switch (fc) {
+        case IEC61850_FC_SP: // Setpoint
+        case IEC61850_FC_CF: // Configuration
+        case IEC61850_FC_DC: // Description
+        case IEC61850_FC_SV: // Substitution
+        case IEC61850_FC_SE: // Setting group editable
+        case IEC61850_FC_SG: // Setting group
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
+
+static gboolean is_mms_type_editable(MmsType type) {
+    switch (type) {
+        case MMS_BOOLEAN:
+        case MMS_INTEGER:
+        case MMS_UNSIGNED:
+        case MMS_FLOAT:
+        case MMS_VISIBLE_STRING:
+        case MMS_STRING:
+        case MMS_BIT_STRING:
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
+
+static char *mms_value_to_string(MmsValue *val) {
     if (!val) return g_strdup("NULL");
 
     MmsType type = MmsValue_getType(val);
@@ -127,10 +176,8 @@ static char *mms_value_to_string(MmsValue *val) {
         case MMS_STRING:
             return g_strdup_printf("\"%s\"", MmsValue_toString(val));
         case MMS_BIT_STRING: {
-
             int size = MmsValue_getBitStringSize(val);
             GString *bits = g_string_new("0b");
-
             for (int i = 0; i < size; i++) {
                 g_string_append_c(bits, MmsValue_getBitStringBit(val, i) ? '1' : '0');
             }
@@ -157,11 +204,68 @@ static char *mms_value_to_string(MmsValue *val) {
     }
 }
 
+static MmsValue *string_to_mms_value(const char *text, MmsType type, int bitstring_size) {
+    if (!text) return NULL;
+
+    switch (type) {
+        case MMS_BOOLEAN: {
+            if (g_ascii_strcasecmp(text, "true") == 0 || strcmp(text, "1") == 0)
+                return MmsValue_newBoolean(true);
+            if (g_ascii_strcasecmp(text, "false") == 0 || strcmp(text, "0") == 0)
+                return MmsValue_newBoolean(false);
+            return NULL;
+        }
+        case MMS_INTEGER: {
+            char *endptr;
+            long long val = strtoll(text, &endptr, 10);
+            if (*text == '\0' || *endptr != '\0') return NULL;
+            return MmsValue_newIntegerFromInt64((int64_t)val);
+        }
+        case MMS_UNSIGNED: {
+            char *endptr;
+            unsigned long val = strtoul(text, &endptr, 10);
+            if (*text == '\0' || *endptr != '\0') return NULL;
+            return MmsValue_newUnsignedFromUint32((uint32_t)val);
+        }
+        case MMS_FLOAT: {
+            char *endptr;
+            float val = strtof(text, &endptr);
+            if (*text == '\0' || *endptr != '\0') return NULL;
+            return MmsValue_newFloat(val);
+        }
+        case MMS_VISIBLE_STRING:
+            return MmsValue_newVisibleString(text);
+        case MMS_STRING:
+            return MmsValue_newMmsString(text);
+        case MMS_BIT_STRING: {
+            const char *bits = text;
+            if (g_str_has_prefix(bits, "0b") || g_str_has_prefix(bits, "0B"))
+                bits += 2;
+            int len = (int)strlen(bits);
+            if (len == 0) return NULL;
+            int target_size = (bitstring_size > 0) ? bitstring_size : len;
+            MmsValue *mms = MmsValue_newBitString(target_size);
+            for (int i = 0; i < len && i < target_size; i++) {
+                if (bits[i] == '1')
+                    MmsValue_setBitStringBit(mms, i, true);
+                else if (bits[i] == '0')
+                    MmsValue_setBitStringBit(mms, i, false);
+                else {
+                    MmsValue_delete(mms);
+                    return NULL;
+                }
+            }
+            return mms;
+        }
+        default:
+            return NULL;
+    }
+}
+
 // ============================================================================
 // 4. EXPANSÃO DINÂMICA DA ÁRVORE
 // ============================================================================
 static GListModel *create_child_model(gpointer item, gpointer user_data) {
-
     AppState *state = (AppState *)user_data;
     IedNode *node = IED_NODE(item);
 
@@ -240,16 +344,44 @@ static GListModel *create_child_model(gpointer item, gpointer user_data) {
 }
 
 // ============================================================================
-// 5. LEITURA ASSÍNCRONA DO VALOR E AUTO-ATUALIZAÇÃO (TIMER)
+// 5. LEITURA, ESCRITA ASSÍNCRONA E AUTO-ATUALIZAÇÃO
 // ============================================================================
 static void set_button_icon_and_label(GtkWidget *button, const char *icon_name, const char *label_text) {
-
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     GtkWidget *icon = gtk_image_new_from_icon_name(icon_name);
     GtkWidget *label = gtk_label_new(label_text);
     gtk_box_append(GTK_BOX(box), icon);
     gtk_box_append(GTK_BOX(box), label);
     gtk_button_set_child(GTK_BUTTON(button), box);
+}
+
+static void update_write_controls(AppState *state, gboolean can_write, MmsType type) {
+    gtk_widget_set_sensitive(state->entry_write, can_write);
+    gtk_widget_set_sensitive(state->btn_write, can_write);
+
+    if (!can_write) {
+        gtk_entry_set_placeholder_text(GTK_ENTRY(state->entry_write), "Variável somente leitura ou estrutura");
+        return;
+    }
+
+    switch (type) {
+        case MMS_BOOLEAN:
+            gtk_entry_set_placeholder_text(GTK_ENTRY(state->entry_write), "Ex: 1, 0, true ou false");
+            break;
+        case MMS_INTEGER:
+        case MMS_UNSIGNED:
+            gtk_entry_set_placeholder_text(GTK_ENTRY(state->entry_write), "Ex: 42");
+            break;
+        case MMS_FLOAT:
+            gtk_entry_set_placeholder_text(GTK_ENTRY(state->entry_write), "Ex: 125.50");
+            break;
+        case MMS_BIT_STRING:
+            gtk_entry_set_placeholder_text(GTK_ENTRY(state->entry_write), "Ex: 0b0101");
+            break;
+        default:
+            gtk_entry_set_placeholder_text(GTK_ENTRY(state->entry_write), "Digite o novo valor...");
+            break;
+    }
 }
 
 static void stop_auto_refresh(AppState *state) {
@@ -272,6 +404,15 @@ static gboolean on_read_finished(gpointer user_data) {
 
     if (state->selected_node && g_strcmp0(state->selected_node->reference, task->reference) == 0) {
         gtk_label_set_text(GTK_LABEL(state->lbl_value), task->result_text);
+
+        if (task->read_ok) {
+            state->current_mms_type = task->mms_type;
+            state->current_bitstring_size = task->bitstring_size;
+            gboolean can_write = is_fc_writable(state->selected_node->fc) && is_mms_type_editable(task->mms_type);
+            update_write_controls(state, can_write, task->mms_type);
+        } else {
+            update_write_controls(state, FALSE, MMS_STRUCTURE);
+        }
     }
 
     state->is_reading = FALSE;
@@ -283,26 +424,28 @@ static gboolean on_read_finished(gpointer user_data) {
 }
 
 static gpointer read_thread_worker(gpointer user_data) {
-
     ReadTaskData *task = (ReadTaskData *)user_data;
     AppState *state = task->state;
     g_mutex_lock(&state->net_mutex);
 
     if (state->is_connected && state->con) {
-        
         IedClientError error;
-
         MmsValue *val = IedConnection_readObject(state->con, &error, task->reference, task->fc);
 
         if (error == IED_ERROR_OK && val != NULL) {
+            task->read_ok = TRUE;
+            task->mms_type = MmsValue_getType(val);
+            if (task->mms_type == MMS_BIT_STRING) {
+                task->bitstring_size = MmsValue_getBitStringSize(val);
+            }
             task->result_text = mms_value_to_string(val);
             MmsValue_delete(val);
-        } 
-        else {
+        } else {
+            task->read_ok = FALSE;
             task->result_text = g_strdup_printf("Erro de leitura (Código: %d)", error);
         }
-    } 
-    else {
+    } else {
+        task->read_ok = FALSE;
         task->result_text = g_strdup("Desconectado");
     }
 
@@ -312,42 +455,120 @@ static gpointer read_thread_worker(gpointer user_data) {
 }
 
 static void trigger_async_read(AppState *state) {
-
-    if (!state->selected_node || state->is_reading) 
+    if (!state->selected_node || state->is_reading)
         return;
-    
+
     IedNode *node = state->selected_node;
     gtk_label_set_text(GTK_LABEL(state->lbl_ref), node->reference);
     const char *type_names[] = {"Logical Device (LD)", "Logical Node (LN)", "Data Object (DO)", "Data Attribute / Sub-DO"};
     gtk_label_set_text(GTK_LABEL(state->lbl_type), type_names[node->type]);
-    
+
     if (node->fc != IEC61850_FC_NONE) {
         gtk_label_set_text(GTK_LABEL(state->lbl_fc), FunctionalConstraint_toString(node->fc));
-    } 
-    else {
+    } else {
         gtk_label_set_text(GTK_LABEL(state->lbl_fc), "N/A");
     }
-    
+
     if (state->is_connected && node->type == NODE_DA && node->fc != IEC61850_FC_NONE) {
         state->is_reading = TRUE;
         gtk_widget_set_sensitive(state->btn_refresh, TRUE);
         gtk_widget_set_sensitive(state->btn_auto_refresh, TRUE);
+
         ReadTaskData *task = g_new0(ReadTaskData, 1);
         task->state = state;
         task->reference = g_strdup(node->reference);
         task->fc = node->fc;
         g_thread_new("mms-read", read_thread_worker, task);
-    } 
-    else {
+    } else {
         stop_auto_refresh(state);
+        update_write_controls(state, FALSE, MMS_STRUCTURE);
         gtk_label_set_text(GTK_LABEL(state->lbl_value), "(Selecione um Data Attribute folha para ler o valor)");
         gtk_widget_set_sensitive(state->btn_refresh, FALSE);
         gtk_widget_set_sensitive(state->btn_auto_refresh, FALSE);
     }
 }
 
-static gboolean on_auto_refresh_tick(gpointer user_data) {
+// --- Lógica de Escrita ---
+static gboolean on_write_finished(gpointer user_data) {
+    WriteTaskData *task = (WriteTaskData *)user_data;
+    AppState *state = task->state;
 
+    if (!task->parse_ok) {
+        gtk_label_set_text(GTK_LABEL(state->lbl_status), "Status: Formato de valor inválido para o tipo MMS da variável.");
+    } else if (task->error == IED_ERROR_OK) {
+        char *msg = g_strdup_printf("Status: Valor escrito com sucesso em %s", task->reference);
+        gtk_label_set_text(GTK_LABEL(state->lbl_status), msg);
+        g_free(msg);
+        gtk_editable_set_text(GTK_EDITABLE(state->entry_write), "");
+        trigger_async_read(state);
+    } else {
+        char *msg = g_strdup_printf("Status: Falha ao escrever em %s (Erro libiec61850: %d)", task->reference, task->error);
+        gtk_label_set_text(GTK_LABEL(state->lbl_status), msg);
+        g_free(msg);
+    }
+
+    if (state->selected_node && is_fc_writable(state->selected_node->fc)) {
+        gtk_widget_set_sensitive(state->btn_write, TRUE);
+    }
+
+    g_free(task->reference);
+    g_free(task->input_text);
+    g_free(task);
+    return G_SOURCE_REMOVE;
+}
+
+static gpointer write_thread_worker(gpointer user_data) {
+    WriteTaskData *task = (WriteTaskData *)user_data;
+    AppState *state = task->state;
+
+    MmsValue *new_val = string_to_mms_value(task->input_text, task->mms_type, task->bitstring_size);
+    if (!new_val) {
+        task->parse_ok = FALSE;
+        g_idle_add(on_write_finished, task);
+        return NULL;
+    }
+
+    task->parse_ok = TRUE;
+    g_mutex_lock(&state->net_mutex);
+
+    if (state->is_connected && state->con) {
+        IedConnection_writeObject(state->con, &task->error, task->reference, task->fc, new_val);
+    } else {
+        task->error = IED_ERROR_NOT_CONNECTED;
+    }
+
+    g_mutex_unlock(&state->net_mutex);
+    MmsValue_delete(new_val);
+
+    g_idle_add(on_write_finished, task);
+    return NULL;
+}
+
+static void on_write_clicked(GtkButton *btn, gpointer user_data) {
+    (void)btn;
+    AppState *state = (AppState *)user_data;
+
+    if (!state->is_connected || !state->selected_node)
+        return;
+
+    const char *text = gtk_editable_get_text(GTK_EDITABLE(state->entry_write));
+    if (!text || strlen(text) == 0)
+        return;
+
+    gtk_widget_set_sensitive(state->btn_write, FALSE);
+
+    WriteTaskData *task = g_new0(WriteTaskData, 1);
+    task->state = state;
+    task->reference = g_strdup(state->selected_node->reference);
+    task->fc = state->selected_node->fc;
+    task->input_text = g_strdup(text);
+    task->mms_type = state->current_mms_type;
+    task->bitstring_size = state->current_bitstring_size;
+
+    g_thread_new("mms-write", write_thread_worker, task);
+}
+
+static gboolean on_auto_refresh_tick(gpointer user_data) {
     AppState *state = (AppState *)user_data;
 
     if (!state->is_connected || !state->selected_node) {
@@ -360,28 +581,23 @@ static gboolean on_auto_refresh_tick(gpointer user_data) {
 }
 
 static void on_auto_refresh_toggled(GtkToggleButton *btn, gpointer user_data) {
-
     AppState *state = (AppState *)user_data;
 
     if (gtk_toggle_button_get_active(btn)) {
-
         guint interval_ms = (guint)gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(state->spin_interval));
-
-        if (interval_ms < 50) 
+        if (interval_ms < 50)
             interval_ms = 50;
 
         gtk_widget_set_sensitive(state->spin_interval, FALSE);
         set_button_icon_and_label(GTK_WIDGET(btn), "media-playback-stop-symbolic", "Parar Auto-Atualizar");
         trigger_async_read(state);
         state->auto_refresh_timer_id = g_timeout_add(interval_ms, on_auto_refresh_tick, state);
-    } 
-    else {
+    } else {
         stop_auto_refresh(state);
     }
 }
 
 static void on_selection_changed(GtkSelectionModel *model, guint position, guint n_items, gpointer user_data) {
-
     (void)position;
     (void)n_items;
     AppState *state = (AppState *)user_data;
@@ -389,22 +605,22 @@ static void on_selection_changed(GtkSelectionModel *model, guint position, guint
 
     if (row) {
         state->selected_node = IED_NODE(gtk_tree_list_row_get_item(row));
+        gtk_editable_set_text(GTK_EDITABLE(state->entry_write), "");
+        update_write_controls(state, FALSE, MMS_STRUCTURE);
         trigger_async_read(state);
     }
 }
 
 static void on_refresh_clicked(GtkButton *btn, gpointer user_data) {
-
     (void)btn;
     AppState *state = (AppState *)user_data;
     trigger_async_read(state);
 }
 
 // ============================================================================
-// 6. RENDERIZAÇÃO DAS LINHAS DA ÁRVORE COM ÍCONES NATIVOS (GtkImage)
+// 6. RENDERIZAÇÃO DAS LINHAS DA ÁRVORE COM ÍCONES NATIVOS
 // ============================================================================
 static void setup_tree_item(GtkListItemFactory *factory, GtkListItem *list_item, gpointer user_data) {
-
     (void)factory;
     (void)user_data;
     GtkWidget *expander = gtk_tree_expander_new();
@@ -419,7 +635,6 @@ static void setup_tree_item(GtkListItemFactory *factory, GtkListItem *list_item,
 }
 
 static void bind_tree_item(GtkListItemFactory *factory, GtkListItem *list_item, gpointer user_data) {
-
     (void)factory;
     (void)user_data;
     GtkTreeListRow *row = gtk_list_item_get_item(list_item);
@@ -429,15 +644,15 @@ static void bind_tree_item(GtkListItemFactory *factory, GtkListItem *list_item, 
     GtkWidget *box = gtk_tree_expander_get_child(GTK_TREE_EXPANDER(expander));
     GtkWidget *icon = gtk_widget_get_first_child(box);
     GtkWidget *label = gtk_widget_get_next_sibling(icon);
-    const char *icon_name = "emblem-system-symbolic"; // Data Attribute
+    const char *icon_name = "emblem-system-symbolic";
 
-    if (node->type == NODE_LD) 
-        icon_name = "drive-harddisk-symbolic";      // Logical Device
-    else if (node->type == NODE_LN) 
-        icon_name = "text-x-generic-symbolic"; // Logical Node
-    else if (node->type == NODE_DO) 
-        icon_name = "folder-symbolic";         // Data Object
-    
+    if (node->type == NODE_LD)
+        icon_name = "drive-harddisk-symbolic";
+    else if (node->type == NODE_LN)
+        icon_name = "text-x-generic-symbolic";
+    else if (node->type == NODE_DO)
+        icon_name = "folder-symbolic";
+
     gtk_image_set_from_icon_name(GTK_IMAGE(icon), icon_name);
     gtk_label_set_text(GTK_LABEL(label), node->name);
 }
@@ -456,7 +671,6 @@ static gboolean on_connect_finished(gpointer user_data) {
         g_mutex_unlock(&state->net_mutex);
 
         if (task->device_list) {
-
             for (LinkedList el = LinkedList_getNext(task->device_list); el != NULL; el = LinkedList_getNext(el)) {
                 char *ldName = (char *)el->data;
                 IedNode *ldNode = ied_node_new(ldName, ldName, NODE_LD, IEC61850_FC_NONE);
@@ -471,12 +685,9 @@ static gboolean on_connect_finished(gpointer user_data) {
         g_free(status_msg);
         gtk_widget_set_sensitive(state->btn_connect, FALSE);
         gtk_widget_set_sensitive(state->btn_disconnect, TRUE);
-    } 
-    else {
-
+    } else {
         if (task->con) IedConnection_destroy(task->con);
-            char *err_msg = g_strdup_printf("Status: Falha ao conectar em %s:%d (Erro libiec61850: %d)", task->ip, task->port, task->error);
-        
+        char *err_msg = g_strdup_printf("Status: Falha ao conectar em %s:%d (Erro libiec61850: %d)", task->ip, task->port, task->error);
         gtk_label_set_text(GTK_LABEL(state->lbl_status), err_msg);
         g_free(err_msg);
         gtk_widget_set_sensitive(state->btn_connect, TRUE);
@@ -487,7 +698,6 @@ static gboolean on_connect_finished(gpointer user_data) {
 }
 
 static gpointer connect_thread_worker(gpointer user_data) {
-
     ConnectTaskData *task = (ConnectTaskData *)user_data;
     task->con = IedConnection_create();
     IedConnection_setConnectTimeout(task->con, 3000);
@@ -502,7 +712,6 @@ static gpointer connect_thread_worker(gpointer user_data) {
 }
 
 static void on_disconnect_clicked(GtkButton *btn, gpointer user_data) {
-
     (void)btn;
     AppState *state = (AppState *)user_data;
     stop_auto_refresh(state);
@@ -518,6 +727,8 @@ static void on_disconnect_clicked(GtkButton *btn, gpointer user_data) {
     g_mutex_unlock(&state->net_mutex);
     g_list_store_remove_all(state->root_store);
     state->selected_node = NULL;
+    update_write_controls(state, FALSE, MMS_STRUCTURE);
+    gtk_editable_set_text(GTK_EDITABLE(state->entry_write), "");
     gtk_widget_set_sensitive(state->btn_connect, TRUE);
     gtk_widget_set_sensitive(state->btn_disconnect, FALSE);
     gtk_widget_set_sensitive(state->btn_refresh, FALSE);
@@ -527,7 +738,6 @@ static void on_disconnect_clicked(GtkButton *btn, gpointer user_data) {
 }
 
 static void on_connect_clicked(GtkButton *btn, gpointer user_data) {
-
     (void)btn;
     AppState *state = (AppState *)user_data;
     const char *ip = gtk_editable_get_text(GTK_EDITABLE(state->entry_ip));
@@ -547,12 +757,11 @@ static void on_connect_clicked(GtkButton *btn, gpointer user_data) {
 // 8. CONSTRUÇÃO DA INTERFACE GRÁFICA
 // ============================================================================
 static void activate(GtkApplication *app, gpointer user_data) {
-
     (void)user_data;
     AppState *state = g_new0(AppState, 1);
     g_mutex_init(&state->net_mutex);
     state->window = gtk_application_window_new(app);
-    gtk_window_set_title(GTK_WINDOW(state->window), "Mini IED Explorer - Browser & Leitura MMS");
+    gtk_window_set_title(GTK_WINDOW(state->window), "Mini IED Explorer - Browser, Leitura & Escrita MMS");
     gtk_window_set_default_size(GTK_WINDOW(state->window), 980, 600);
     GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
     gtk_widget_set_margin_top(vbox, 12);
@@ -609,10 +818,12 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_label_set_use_markup(GTK_LABEL(title), TRUE);
     gtk_label_set_xalign(GTK_LABEL(title), 0.0);
     gtk_box_append(GTK_BOX(right_box), title);
+
     GtkWidget *grid = gtk_grid_new();
     gtk_grid_set_row_spacing(GTK_GRID(grid), 10);
     gtk_grid_set_column_spacing(GTK_GRID(grid), 12);
     gtk_box_append(GTK_BOX(right_box), grid);
+
     state->lbl_ref = gtk_label_new("-");
     state->lbl_type = gtk_label_new("-");
     state->lbl_fc = gtk_label_new("-");
@@ -623,6 +834,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_label_set_xalign(GTK_LABEL(state->lbl_type), 0.0);
     gtk_label_set_xalign(GTK_LABEL(state->lbl_fc), 0.0);
     gtk_label_set_xalign(GTK_LABEL(state->lbl_value), 0.0);
+
     gtk_grid_attach(GTK_GRID(grid), gtk_label_new("Referência:"), 0, 0, 1, 1);
     gtk_grid_attach(GTK_GRID(grid), state->lbl_ref, 1, 0, 1, 1);
     gtk_grid_attach(GTK_GRID(grid), gtk_label_new("Nível Hierárquico:"), 0, 1, 1, 1);
@@ -632,7 +844,30 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_grid_attach(GTK_GRID(grid), gtk_label_new("Valor Atual (MMS):"), 0, 3, 1, 1);
     gtk_grid_attach(GTK_GRID(grid), state->lbl_value, 1, 3, 1, 1);
 
+    // --- Seção de Escrita ---
+    gtk_box_append(GTK_BOX(right_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+    GtkWidget *lbl_write_title = gtk_label_new("Escrita de Valor (Variáveis Editáveis)");
+    gtk_label_set_xalign(GTK_LABEL(lbl_write_title), 0.0);
+    gtk_box_append(GTK_BOX(right_box), lbl_write_title);
+
+    GtkWidget *hbox_write = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_box_append(GTK_BOX(right_box), hbox_write);
+
+    state->entry_write = gtk_entry_new();
+    gtk_widget_set_hexpand(state->entry_write, TRUE);
+    gtk_widget_set_sensitive(state->entry_write, FALSE);
+    gtk_entry_set_placeholder_text(GTK_ENTRY(state->entry_write), "Selecione uma variável editável...");
+
+    state->btn_write = gtk_button_new();
+    set_button_icon_and_label(state->btn_write, "document-send-symbolic", "Escrever");
+    gtk_widget_set_sensitive(state->btn_write, FALSE);
+    g_signal_connect(state->btn_write, "clicked", G_CALLBACK(on_write_clicked), state);
+
+    gtk_box_append(GTK_BOX(hbox_write), state->entry_write);
+    gtk_box_append(GTK_BOX(hbox_write), state->btn_write);
+
     // --- Barra de Controles de Atualização (Manual + Automática) ---
+    gtk_box_append(GTK_BOX(right_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
     GtkWidget *hbox_refresh = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_box_append(GTK_BOX(right_box), hbox_refresh);
     state->btn_refresh = gtk_button_new();
@@ -658,7 +893,6 @@ static void activate(GtkApplication *app, gpointer user_data) {
 }
 
 int main(int argc, char **argv) {
-    
     GtkApplication *app = gtk_application_new("br.com.automacao.miniiedexplorer", G_APPLICATION_DEFAULT_FLAGS);
     g_signal_connect(app, "activate", G_CALLBACK(activate), NULL);
     int status = g_application_run(G_APPLICATION(app), argc, argv);
