@@ -13,6 +13,12 @@ $ sudo apt update
 $ sudo apt install -y build-essential cmake pkg-config libgtk-4-dev adwaita-icon-theme
 ```
 
+- Clonar o repositório da libiec61850:
+
+```
+$ git clone https://github.com/mz-automation/libiec61850.git
+```
+
 ### O que cada pacote faz:
 
 - build-essential: Instala o compilador gcc, o make e as bibliotecas padrão da linguagem C.
@@ -33,12 +39,13 @@ $ sudo apt install -y libgtk-4-1 adwaita-icon-theme
 ```
 
 ### Para saber todas as dependências do binário:
+
 ```
 $ ldd ./bin/mini_ied_explorer
 ```
 
 ## Antes de compilar:
-Edite o arquivo "Makefile" colocando na variável "IEC_DIR" o caminho onde foi descompactada
+Edite o arquivo "Makefile" colocando na variável "IEC_DIR" o caminho onde foi clonada
 a biblioteca "libiec61850.
 
 Ex:
