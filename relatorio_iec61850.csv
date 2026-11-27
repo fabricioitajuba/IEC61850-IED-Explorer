@@ -1,0 +1,35 @@
+Timestamp_UTC;RptID;SeqNum;Variavel;Valor;Motivo
+2026-11-27 13:06:45 UTC;RptUnbuf01;7;IED-Server-mmsGenericIO/GGIO1.Ind1.stVal[ST];FALSE (0);Data Change
+2026-11-27 13:06:45 UTC;RptUnbuf01;7;IED-Server-mmsGenericIO/GGIO1.Ind2.stVal[ST];TRUE (1);Data Change
+2026-11-27 13:06:45 UTC;RptUnbuf01;7;IED-Server-mmsGenericIO/GGIO1.DPCSO1.stVal[ST];0b00;Data Change
+2026-11-27 13:06:45 UTC;RptUnbuf01;7;IED-Server-mmsGenericIO/GGIO1.AnIn1.mag.f[MX];227.5000;Data Change
+2026-11-27 13:06:46 UTC;RptUnbuf01;8;IED-Server-mmsGenericIO/GGIO1.Ind1.stVal[ST];TRUE (1);Data Change
+2026-11-27 13:06:46 UTC;RptUnbuf01;8;IED-Server-mmsGenericIO/GGIO1.DPCSO1.stVal[ST];0b11;Data Change
+2026-11-27 13:06:46 UTC;RptUnbuf01;8;IED-Server-mmsGenericIO/GGIO1.AnIn1.mag.f[MX];228.0000;Data Change
+2026-11-27 13:06:47 UTC;RptUnbuf01;9;IED-Server-mmsGenericIO/GGIO1.Ind1.stVal[ST];FALSE (0);Data Change
+2026-11-27 13:06:47 UTC;RptUnbuf01;9;IED-Server-mmsGenericIO/GGIO1.Ind2.stVal[ST];FALSE (0);Data Change
+2026-11-27 13:06:47 UTC;RptUnbuf01;9;IED-Server-mmsGenericIO/GGIO1.Ind3.stVal[ST];TRUE (1);Data Change
+2026-11-27 13:06:47 UTC;RptUnbuf01;9;IED-Server-mmsGenericIO/GGIO1.DPCSO1.stVal[ST];0b01;Data Change
+2026-11-27 13:06:47 UTC;RptUnbuf01;9;IED-Server-mmsGenericIO/GGIO1.AnIn1.mag.f[MX];228.5000;Data Change
+2026-11-27 13:06:48 UTC;RptUnbuf01;10;IED-Server-mmsGenericIO/GGIO1.Ind1.stVal[ST];TRUE (1);Data Change
+2026-11-27 13:06:48 UTC;RptUnbuf01;10;IED-Server-mmsGenericIO/GGIO1.DPCSO1.stVal[ST];0b10;Data Change
+2026-11-27 13:06:48 UTC;RptUnbuf01;10;IED-Server-mmsGenericIO/GGIO1.AnIn1.mag.f[MX];229.0000;Data Change
+2026-11-27 13:06:49 UTC;RptUnbuf01;11;IED-Server-mmsGenericIO/GGIO1.Ind1.stVal[ST];TRUE (1);Integrity
+2026-11-27 13:06:49 UTC;RptUnbuf01;11;IED-Server-mmsGenericIO/GGIO1.Ind2.stVal[ST];FALSE (0);Integrity
+2026-11-27 13:06:49 UTC;RptUnbuf01;11;IED-Server-mmsGenericIO/GGIO1.Ind3.stVal[ST];TRUE (1);Integrity
+2026-11-27 13:06:49 UTC;RptUnbuf01;11;IED-Server-mmsGenericIO/GGIO1.Ind4.stVal[ST];TRUE (1);Integrity
+2026-11-27 13:06:49 UTC;RptUnbuf01;11;IED-Server-mmsGenericIO/GGIO1.DPCSO1.stVal[ST];0b10;Integrity
+2026-11-27 13:06:49 UTC;RptUnbuf01;11;IED-Server-mmsGenericIO/GGIO1.AnIn1.mag.f[MX];229.0000;Integrity
+2026-11-27 13:06:49 UTC;RptUnbuf01;12;IED-Server-mmsGenericIO/GGIO1.Ind1.stVal[ST];FALSE (0);Data Change
+2026-11-27 13:06:49 UTC;RptUnbuf01;12;IED-Server-mmsGenericIO/GGIO1.Ind2.stVal[ST];TRUE (1);Data Change
+2026-11-27 13:06:49 UTC;RptUnbuf01;12;IED-Server-mmsGenericIO/GGIO1.DPCSO1.stVal[ST];0b00;Data Change
+2026-11-27 13:06:49 UTC;RptUnbuf01;12;IED-Server-mmsGenericIO/GGIO1.AnIn1.mag.f[MX];229.5000;Data Change
+2026-11-27 13:06:50 UTC;RptUnbuf01;13;IED-Server-mmsGenericIO/GGIO1.Ind1.stVal[ST];TRUE (1);Data Change
+2026-11-27 13:06:50 UTC;RptUnbuf01;13;IED-Server-mmsGenericIO/GGIO1.DPCSO1.stVal[ST];0b11;Data Change
+2026-11-27 13:06:50 UTC;RptUnbuf01;13;IED-Server-mmsGenericIO/GGIO1.AnIn1.mag.f[MX];230.0000;Data Change
+2026-11-27 13:06:51 UTC;RptUnbuf01;14;IED-Server-mmsGenericIO/GGIO1.Ind1.stVal[ST];FALSE (0);Data Change
+2026-11-27 13:06:51 UTC;RptUnbuf01;14;IED-Server-mmsGenericIO/GGIO1.Ind2.stVal[ST];FALSE (0);Data Change
+2026-11-27 13:06:51 UTC;RptUnbuf01;14;IED-Server-mmsGenericIO/GGIO1.Ind3.stVal[ST];FALSE (0);Data Change
+2026-11-27 13:06:51 UTC;RptUnbuf01;14;IED-Server-mmsGenericIO/GGIO1.Ind4.stVal[ST];FALSE (0);Data Change
+2026-11-27 13:06:51 UTC;RptUnbuf01;14;IED-Server-mmsGenericIO/GGIO1.DPCSO1.stVal[ST];0b01;Data Change
+2026-11-27 13:06:51 UTC;RptUnbuf01;14;IED-Server-mmsGenericIO/GGIO1.AnIn1.mag.f[MX];230.5000;Data Change
